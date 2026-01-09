@@ -29,33 +29,53 @@ export async function openaiExtract(args: {
   maxTokens: number;
   signal?: AbortSignal;
 }): Promise<LlmExtractResult> {
-  const url = `${args.baseUrl.replace(/\/$/, "")}/responses`;
-  const body = {
-    model: args.model,
-    input: args.prompt,
-    temperature: args.temperature,
-    top_p: args.topP,
-    max_output_tokens: args.maxTokens,
-    // Encourage JSON-only output
-    response_format: { type: "json_object" }
-  };
+  const base = args.baseUrl.replace(/\/$/, "");
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
+  // 1) Try Responses API first
+  try {
+    const url = `${base}/responses`;
+    const body = {
+      model: args.model,
+      input: args.prompt,
+      temperature: args.temperature,
+      top_p: args.topP,
+      max_output_tokens: args.maxTokens,
+      response_format: { type: "json_object" }
+    };
+    const json = await postJson(url, body, {
       "Content-Type": "application/json",
       Authorization: `Bearer ${args.apiKey}`
-    },
-    body: JSON.stringify(body),
-    signal: args.signal
-  });
-  if (!res.ok) {
-    throw new Error(`OpenAI HTTP ${res.status}: ${await safeText(res)}`);
+    }, args.signal);
+    const text = extractOpenAIResponseText(json);
+    try {
+      const parsed = JSON.parse(text);
+      return { ...(parsed as any), rawText: text };
+    } catch (e: any) {
+      throw new Error(explainBadJson(text, e));
+    }
+  } catch (e: any) {
+    // 2) Fallback for OpenAI-compatible gateways: Chat Completions
+    const url = `${base}/chat/completions`;
+    const body = {
+      model: args.model,
+      messages: [{ role: "user", content: args.prompt }],
+      temperature: args.temperature,
+      top_p: args.topP,
+      max_tokens: args.maxTokens,
+      response_format: { type: "json_object" }
+    };
+    const json = await postJson(url, body, {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${args.apiKey}`
+    }, args.signal);
+    const text = extractOpenAIChatText(json);
+    try {
+      const parsed = JSON.parse(text);
+      return { ...(parsed as any), rawText: text };
+    } catch (err: any) {
+      throw new Error(explainBadJson(text, err));
+    }
   }
-  const json: any = await res.json();
-  const text = extractOpenAIResponseText(json);
-  const parsed = JSON.parse(text);
-  return { ...(parsed as any), rawText: text };
 }
 
 function extractOpenAIResponseText(json: any) {
@@ -66,6 +86,50 @@ function extractOpenAIResponseText(json: any) {
   if (typeof out === "string") return out;
   // last resort: stringify
   return JSON.stringify(json);
+}
+
+function extractOpenAIChatText(json: any) {
+  const t = json?.choices?.[0]?.message?.content;
+  if (typeof t === "string") return t;
+  return JSON.stringify(json);
+}
+
+async function postJson(url: string, body: any, headers: Record<string, string>, signal?: AbortSignal) {
+  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(body), signal });
+  const raw = await safeText(res);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}: ${truncate(raw, 500)}`);
+  }
+  if (looksLikeHtml(raw)) {
+    throw new Error(
+      `返回了 HTML 而不是 JSON（多半是 baseUrl/协议不匹配，或该网关不支持该端点）。前 120 字符：${truncate(raw, 120)}`
+    );
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e: any) {
+    throw new Error(`响应不是有效 JSON：${String(e?.message ?? e)}；前 120 字符：${truncate(raw, 120)}`);
+  }
+}
+
+function explainBadJson(text: string, err: any) {
+  if (looksLikeHtml(text)) {
+    return `LLM 返回了 HTML（<!DOCTYPE/...>），说明你打到的是网页/错误页而不是模型输出。请检查 protocol 与 baseUrl（例如 OpenAI 应为 https://api.openai.com/v1）。前 120 字符：${truncate(
+      text,
+      120
+    )}`;
+  }
+  return `LLM 输出不是有效 JSON：${String(err?.message ?? err)}；前 200 字符：${truncate(text, 200)}`;
+}
+
+function looksLikeHtml(s: string) {
+  const t = s.trim().slice(0, 200).toLowerCase();
+  return t.startsWith("<!doctype") || t.startsWith("<html") || t.includes("<head") || t.includes("<body");
+}
+
+function truncate(s: string, n: number) {
+  if (s.length <= n) return s;
+  return s.slice(0, n);
 }
 
 async function safeText(res: Response) {
