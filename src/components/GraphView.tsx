@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import cytoscape, { Core } from "cytoscape";
 import { useAppStore } from "../state/store";
+import { MathJaxBlock } from "./MathJaxBlock";
+import { repairLatexForMathJax } from "../lib/mathjax/repairWithLlm";
 
 type Props = {
   elements: any[];
@@ -11,7 +13,12 @@ export function GraphView({ elements, apiRef }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<Core | null>(null);
   const [selected, setSelected] = useState<any | null>(null);
+  const [repairing, setRepairing] = useState(false);
   const assets = useAppStore((s) => s.assets);
+  const graph = useAppStore((s) => s.graph);
+  const llm = useAppStore((s) => s.llm);
+  const selectedNode = selected?.id ? graph.nodes.find((n) => n.id === selected.id) : null;
+  const selectedEdge = selected?.source && selected?.target ? selected : null;
 
   const style = useMemo(
     () =>
@@ -50,6 +57,14 @@ export function GraphView({ elements, apiRef }: Props) {
       {
         selector: 'node[type="Formula"]',
         style: { "background-color": "#b970ff" }
+      },
+      {
+        selector: 'node[type="Example"]',
+        style: { "background-color": "#70ffd1" }
+      },
+      {
+        selector: 'node[type="Exercise"]',
+        style: { "background-color": "#ff70d1" }
       },
       {
         selector: "edge",
@@ -136,18 +151,62 @@ export function GraphView({ elements, apiRef }: Props) {
               </div>
               {"type" in selected ? (
                 <div className="muted" style={{ marginTop: 6 }}>
-                  <b>type</b>: <span className="mono">{selected.type}</span>
+                  <b>type</b>: <span className="mono">{selectedNode?.type ?? selected.type}</span>
                 </div>
               ) : null}
               {"title" in selected ? (
                 <div className="muted" style={{ marginTop: 6 }}>
-                  <b>title</b>: {selected.title}
+                  <b>title</b>: {selectedNode?.title ?? selected.title}
                 </div>
               ) : null}
-              {"content" in selected && selected.content ? (
+              {selectedNode?.content ? (
                 <>
-                  <div className="label">content (LaTeX snippet)</div>
-                  <textarea className="input mono" value={selected.content} readOnly />
+                  <div className="label">MathJax 渲染（尽可能可读）</div>
+                  <MathJaxBlock latex={String(selectedNode.content)} mode={selectedNode.type === "Formula" ? "display" : "auto"} />
+
+                  <div className="row" style={{ marginTop: 10 }}>
+                    <button
+                      className="btn ok"
+                      disabled={repairing || !llm.enabled || !llm.apiKey.trim()}
+                      onClick={async () => {
+                        const node = graph.nodes.find((n) => n.id === selected.id);
+                        if (!node?.content) return;
+                        setRepairing(true);
+                        try {
+                          const original = node.content;
+                          const fixed = await repairLatexForMathJax({ llm, original });
+                          useAppStore.getState().updateNode(node.id, {
+                            content: fixed,
+                            meta: { ...(node.meta ?? {}), originalContent: (node.meta as any)?.originalContent ?? original, mathjaxFixed: true }
+                          });
+                          useAppStore.getState().setInfo("已校正当前节点（MathJax 友好）");
+                        } catch (e: any) {
+                          useAppStore.getState().setError(String(e?.message ?? e));
+                        } finally {
+                          setRepairing(false);
+                        }
+                      }}
+                    >
+                      {repairing ? "校正中..." : "MathJax 渲染校正（当前节点 / LLM）"}
+                    </button>
+                    <button
+                      className="btn"
+                      disabled={repairing}
+                      onClick={() => {
+                        const node = graph.nodes.find((n) => n.id === selected.id);
+                        const original = (node?.meta as any)?.originalContent;
+                        if (node && typeof original === "string") {
+                          useAppStore.getState().updateNode(node.id, { content: original, meta: { ...(node.meta ?? {}), mathjaxFixed: false } });
+                          useAppStore.getState().setInfo("已恢复原始 LaTeX");
+                        }
+                      }}
+                    >
+                      恢复原文
+                    </button>
+                  </div>
+
+                  <div className="label">原始 content（LaTeX）</div>
+                  <textarea className="input mono" value={selectedNode.content} readOnly />
                 </>
               ) : null}
               {"evidence" in selected && selected.evidence ? (
@@ -173,6 +232,57 @@ export function GraphView({ elements, apiRef }: Props) {
               点击节点/边查看详细内容、证据与元数据。
             </div>
           )}
+        </div>
+
+        <div className="card">
+          <div className="h1">MathJax 整体校正（LLM，可选）</div>
+          <div className="muted">
+            当某些节点 LaTeX 无法渲染时，可批量调用 LLM 做“尽可能小的修复”。会修改节点 content，并在 meta 中保留 originalContent。
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button
+              className="btn ok"
+              disabled={repairing || !llm.enabled || !llm.apiKey.trim()}
+              onClick={async () => {
+                setRepairing(true);
+                try {
+                  const nodes = useAppStore.getState().graph.nodes.filter((n) => typeof n.content === "string" && n.content.trim().length > 0);
+                  const concurrency = Math.max(1, Math.min(32, Math.floor(llm.parallelism || 1)));
+                  let next = 0;
+                  let done = 0;
+
+                  const runWorker = async () => {
+                    while (next < nodes.length) {
+                      const idx = next++;
+                      const n = nodes[idx];
+                      const original = n.content ?? "";
+                      try {
+                        const fixed = await repairLatexForMathJax({ llm, original });
+                        useAppStore.getState().updateNode(n.id, {
+                          content: fixed,
+                          meta: { ...(n.meta ?? {}), originalContent: (n.meta as any)?.originalContent ?? original, mathjaxFixed: true }
+                        });
+                      } catch {
+                        // ignore per-node failures; user can retry on the node
+                      } finally {
+                        done++;
+                        if (done % 5 === 0) useAppStore.getState().setInfo(`MathJax 校正进度：${done}/${nodes.length}`);
+                      }
+                    }
+                  };
+
+                  await Promise.all(Array.from({ length: concurrency }, () => runWorker()));
+                  useAppStore.getState().setInfo(`MathJax 整体校正完成：${nodes.length} 个节点尝试修复`);
+                } catch (e: any) {
+                  useAppStore.getState().setError(String(e?.message ?? e));
+                } finally {
+                  setRepairing(false);
+                }
+              }}
+            >
+              {repairing ? "整体校正中..." : "整体校正（全部节点）"}
+            </button>
+          </div>
         </div>
       </div>
     </div>

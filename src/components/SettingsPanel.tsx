@@ -165,6 +165,40 @@ export function SettingsPanel() {
 
           <div className="row" style={{ marginTop: 10 }}>
             <div style={{ flex: 1, minWidth: 160 }}>
+              <div className="label">max_tokens（默认 100000）</div>
+              <input
+                className="input mono"
+                type="number"
+                min={256}
+                step={256}
+                value={llm.maxTokens}
+                onChange={(e) => useAppStore.getState().setLlm({ maxTokens: Number(e.target.value) })}
+                disabled={disabled}
+              />
+              <div className="muted" style={{ marginTop: 6 }}>
+                说明：不同厂商会有上限，超过可能直接报错（本工具不会强行截断）。
+              </div>
+            </div>
+            <div style={{ flex: 1, minWidth: 160 }}>
+              <div className="label">LLM 并行数（并发请求）</div>
+              <input
+                className="input mono"
+                type="number"
+                min={1}
+                max={32}
+                step={1}
+                value={llm.parallelism}
+                onChange={(e) => useAppStore.getState().setLlm({ parallelism: Number(e.target.value) })}
+                disabled={disabled}
+              />
+              <div className="muted" style={{ marginTop: 6 }}>
+                并行越高越快，但更容易触发限流/失败；建议 2-6。
+              </div>
+            </div>
+          </div>
+
+          <div className="row" style={{ marginTop: 10 }}>
+            <div style={{ flex: 1, minWidth: 160 }}>
               <div className="label">temperature</div>
               <input
                 className="input mono"

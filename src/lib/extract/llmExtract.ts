@@ -14,6 +14,7 @@ export async function llmExtractFromChunk(args: {
   model: string;
   temperature: number;
   topP: number;
+  maxTokens: number;
   chunk: LatexChunk;
   selectedEntities: EntityType[];
   selectedRelations: RelationType[];
@@ -37,6 +38,7 @@ export async function llmExtractFromChunk(args: {
     prompt,
     temperature: args.temperature,
     topP: args.topP,
+    maxTokens: args.maxTokens,
     signal: args.signal
   };
 
@@ -47,7 +49,9 @@ export async function llmExtractFromChunk(args: {
         ? await anthropicExtract(common)
         : await geminiExtract(common);
 
-  return normalizeLlmResult(result);
+  const normalized = normalizeLlmResult(result);
+  const { filtered, warnings } = filterSuspicious(normalized, args.chunk.text);
+  return { ...filtered, warnings };
 }
 
 function normalizeLlmResult(result: any): { nodes: GraphNode[]; edges: GraphEdge[] } {
@@ -81,5 +85,51 @@ function normalizeLlmResult(result: any): { nodes: GraphNode[]; edges: GraphEdge
         meta: typeof e.meta === "object" ? e.meta : undefined
       })) as GraphEdge[]
   };
+}
+
+function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }, chunkText: string) {
+  const warnings: string[] = [];
+
+  const keptNodes: GraphNode[] = [];
+  const dropped = new Set<string>();
+
+  for (const n of normalized.nodes) {
+    if (n.type === "Formula") {
+      const content = (n.content ?? "").trim();
+      const title = (n.title ?? "").trim();
+      const grounded =
+        looksLikeMath(content) ||
+        // if content missing but label present, allow (some models omit content)
+        (typeof n.source?.latexLabel === "string" && n.source.latexLabel.length > 0);
+      const titleLooksLikeNarrative = title.length >= 8 && /[\u4e00-\u9fff]/.test(title) && !/(\(|\)|\\|=|\$|_|\^)/.test(title);
+      const titleInChunk = title && chunkText.includes(title);
+
+      if (!grounded || (titleLooksLikeNarrative && !titleInChunk)) {
+        dropped.add(n.id);
+        warnings.push(`已丢弃可疑 Formula: ${n.title} (${n.id})`);
+        continue;
+      }
+    }
+    keptNodes.push(n);
+  }
+
+  const keptNodeIds = new Set(keptNodes.map((n) => n.id));
+  const keptEdges = normalized.edges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
+  const droppedEdgeCount = normalized.edges.length - keptEdges.length;
+  if (droppedEdgeCount > 0) warnings.push(`已丢弃 ${droppedEdgeCount} 条悬空边（源/目标节点被过滤）`);
+
+  return { filtered: { nodes: keptNodes, edges: keptEdges }, warnings };
+}
+
+function looksLikeMath(s: string) {
+  if (!s) return false;
+  // accept common math envs/delimiters or math-heavy tokens
+  if (/\\begin\{(equation|align|aligned|gather|multline)\}/.test(s)) return true;
+  if (/\$\$[\s\S]*\$\$/.test(s)) return true;
+  if (/\\\[[\s\S]*\\\]/.test(s)) return true;
+  if (/\\(frac|sum|int|prod|mathbb|mathbf|mathrm|left|right|cdot|leq|geq|neq|infty)\b/.test(s)) return true;
+  if (/[=<>]/.test(s) && /[a-zA-Z\\]/.test(s)) return true;
+  if (/[0-9]/.test(s) && /[_^]/.test(s)) return true;
+  return false;
 }
 

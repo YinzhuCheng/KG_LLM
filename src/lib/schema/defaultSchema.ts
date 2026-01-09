@@ -6,6 +6,8 @@ export const allEntityTypes: EntityType[] = [
   "Corollary",
   "Definition",
   "Formula",
+  "Example",
+  "Exercise",
   "Axiom",
   "Proposition",
   "Conclusion"

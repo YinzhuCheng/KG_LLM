@@ -19,9 +19,14 @@ ${selectedEntities.map((t) => `- ${t}`).join("\n")}
 ${selectedRelations.map((t) => `- ${t}`).join("\n")}
 
 ## 目标
-- 尽量识别：定理/引理/推论/定义/公式/公理/命题/结论（名称、编号、label、关键公式）
+- 尽量识别：定理/引理/推论/定义/公式/例题/习题/公理/命题/结论（名称、编号、label、关键公式）
 - 关系：证明、依赖、推导自、包含、等价、适用、使用、辅助
 - 允许“跨段落引用”：利用 \\label / \\ref / \\eqref 等把关系连起来
+
+## 重要约束（防止“为了有话可说”而编造）
+- **不得编造实体或关系**：只能抽取 LaTeX 片段中明确出现的内容（环境、公式块、显式陈述），不要凭常识补全。
+- **Formula 节点只能来自明确的数学公式块**：例如 equation/align/\\[ \\]/$$ $$ 等；不要把自然语言句子（如“预计授课节数范围”“习题数量增加比例”）当作 Formula。
+- title 必须短且可追溯：优先使用编号/label/环境标题；不要生成“总结式标题”来替代原文。
 
 ## 现有图谱摘要（用于跨段落连接）
 ${graphSummary}
@@ -45,7 +50,7 @@ ${chunk.text}
       "id": "string (稳定且唯一；优先用 tex:<label>；没有 label 用 chunk:<chunkId>:<type>:<idx>)",
       "type": "EntityType",
       "title": "短标题/编号/名称",
-      "content": "可选，保留少量 LaTeX 片段",
+      "content": "可选，保留少量 LaTeX 原文片段（Formula 必须包含可渲染的公式原文或明确的 math delimiter）",
       "source": { "file": "string", "latexLabel": "string|null", "sectionPath": ["..."] },
       "meta": { "chunkId": "string", "confidence": 0.0 }
     }

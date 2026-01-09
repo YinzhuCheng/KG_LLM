@@ -14,6 +14,8 @@ export type LlmConfig = {
   apiKey: string;
   temperature: number;
   topP: number;
+  maxTokens: number;
+  parallelism: number;
 };
 
 export type UserSchemaSelection = {
@@ -52,6 +54,8 @@ type AppState = {
 
   setGraph: (graph: AppGraph) => void;
   mergeGraph: (patch: { nodes?: GraphNode[]; edges?: GraphEdge[] }) => void;
+  updateNode: (id: string, patch: Partial<GraphNode>) => void;
+  updateNodes: (updates: { id: string; patch: Partial<GraphNode> }[]) => void;
 
   setProcessing: (patch: Partial<AppState["processing"]>) => void;
   stopProcessing: () => void;
@@ -73,7 +77,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     model: "gpt-5",
     apiKey: "",
     temperature: 0.2,
-    topP: 0.9
+    topP: 0.9,
+    maxTokens: 100000,
+    parallelism: 4
   },
   processing: { status: "idle", totalChunks: 0, doneChunks: 0 },
   lastError: null,
@@ -96,6 +102,26 @@ export const useAppStore = create<AppState>((set, get) => ({
         edges: patch.edges ? mergeEdges(s.graph.edges, patch.edges) : s.graph.edges
       }
     })),
+
+  updateNode: (id, patch) =>
+    set((s) => ({
+      graph: { ...s.graph, nodes: s.graph.nodes.map((n) => (n.id === id ? { ...n, ...patch, meta: { ...n.meta, ...(patch as any).meta } } : n)) }
+    })),
+
+  updateNodes: (updates) =>
+    set((s) => {
+      const map = new Map(updates.map((u) => [u.id, u.patch] as const));
+      return {
+        graph: {
+          ...s.graph,
+          nodes: s.graph.nodes.map((n) => {
+            const p = map.get(n.id);
+            if (!p) return n;
+            return { ...n, ...p, meta: { ...n.meta, ...(p as any).meta } };
+          })
+        }
+      };
+    }),
 
   setProcessing: (patch) => set({ processing: { ...get().processing, ...patch } }),
   stopProcessing: () => {

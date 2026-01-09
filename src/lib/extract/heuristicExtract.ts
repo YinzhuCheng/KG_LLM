@@ -11,6 +11,8 @@ const ENV_MAP: Record<string, EntityType> = {
   lemma: "Lemma",
   corollary: "Corollary",
   definition: "Definition",
+  example: "Example",
+  exercise: "Exercise",
   axiom: "Axiom",
   proposition: "Proposition",
   conclusion: "Conclusion"
@@ -41,6 +43,20 @@ export function heuristicExtractFromChunk(args: {
   // 1) Extract theorem-like environments
   const envNodes = extractEnvironments(chunk, selectedEntities, knownLabelToNodeId);
   nodes.push(...envNodes);
+
+  // 1.1) Bind Example/Exercise to nearest previous core node (best-effort)
+  const coreTypes: EntityType[] = ["Theorem", "Lemma", "Corollary", "Definition", "Axiom", "Proposition", "Conclusion", "Formula"];
+  let lastCore: GraphNode | null = null;
+  for (const n of envNodes) {
+    if (coreTypes.includes(n.type) && n.type !== "Example" && n.type !== "Exercise") lastCore = n;
+    if ((n.type === "Example" || n.type === "Exercise") && lastCore) {
+      if (n.type === "Exercise" && selectedRelations.includes("AppliesTo")) {
+        edges.push({ type: "AppliesTo", source: n.id, target: lastCore.id, meta: { chunkId: chunk.id } });
+      } else if (selectedRelations.includes("AssistsIn")) {
+        edges.push({ type: "AssistsIn", source: n.id, target: lastCore.id, meta: { chunkId: chunk.id } });
+      }
+    }
+  }
 
   // 2) Extract display math as Formula
   if (selectedEntities.includes("Formula")) {
@@ -107,7 +123,7 @@ export function heuristicExtractFromChunk(args: {
 
 function extractEnvironments(chunk: LatexChunk, selectedEntities: EntityType[], knownLabelToNodeId: Map<string, string>) {
   const out: GraphNode[] = [];
-  const re = /\\begin\{(theorem|lemma|corollary|definition|axiom|proposition|conclusion)\}([\s\S]*?)\\end\{\1\}/gi;
+  const re = /\\begin\{(theorem|lemma|corollary|definition|example|exercise|axiom|proposition|conclusion)\}([\s\S]*?)\\end\{\1\}/gi;
   let idx = 0;
   for (const m of chunk.text.matchAll(re)) {
     const env = (m[1] ?? "").toLowerCase();
