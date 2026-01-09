@@ -164,6 +164,39 @@ export function GraphView({ elements, apiRef }: Props) {
                   <div className="label">MathJax 渲染（尽可能可读）</div>
                   <MathJaxBlock latex={String(selectedNode.content)} mode={selectedNode.type === "Formula" ? "display" : "auto"} />
 
+                  {(selectedNode.type === "Example" || selectedNode.type === "Exercise") &&
+                  (typeof (selectedNode.meta as any)?.problem === "string" ||
+                    typeof (selectedNode.meta as any)?.solution === "string" ||
+                    typeof (selectedNode.meta as any)?.answer === "string") ? (
+                    <>
+                      <div className="label">结构化展示（同一节点内）</div>
+                      {typeof (selectedNode.meta as any)?.problem === "string" && (selectedNode.meta as any).problem.trim() ? (
+                        <>
+                          <div className="muted" style={{ marginTop: 6 }}>
+                            <b>题面</b>
+                          </div>
+                          <MathJaxBlock latex={String((selectedNode.meta as any).problem)} mode="auto" />
+                        </>
+                      ) : null}
+                      {typeof (selectedNode.meta as any)?.solution === "string" && (selectedNode.meta as any).solution.trim() ? (
+                        <>
+                          <div className="muted" style={{ marginTop: 10 }}>
+                            <b>解答/步骤</b>
+                          </div>
+                          <MathJaxBlock latex={String((selectedNode.meta as any).solution)} mode="auto" />
+                        </>
+                      ) : null}
+                      {typeof (selectedNode.meta as any)?.answer === "string" && (selectedNode.meta as any).answer.trim() ? (
+                        <>
+                          <div className="muted" style={{ marginTop: 10 }}>
+                            <b>答案</b>
+                          </div>
+                          <MathJaxBlock latex={String((selectedNode.meta as any).answer)} mode="auto" />
+                        </>
+                      ) : null}
+                    </>
+                  ) : null}
+
                   <div className="row" style={{ marginTop: 10 }}>
                     <button
                       className="btn ok"

@@ -6,6 +6,7 @@ import { openaiExtract } from "../llm/openai";
 import { anthropicExtract } from "../llm/anthropic";
 import { geminiExtract } from "../llm/gemini";
 import { LatexChunk } from "../latex/chunkLatex";
+import { completeNodeLatexFromChunk } from "./completeFromChunk";
 
 export async function llmExtractFromChunk(args: {
   protocol: LlmProtocol;
@@ -50,7 +51,9 @@ export async function llmExtractFromChunk(args: {
         : await geminiExtract(common);
 
   const normalized = normalizeLlmResult(result);
-  const { filtered, warnings } = filterSuspicious(normalized, args.chunk.text);
+  const completed = applyPatches(normalized, completeNodeLatexFromChunk(normalized.nodes, args.chunk.text));
+  const enriched = annotateExampleExercise(completed);
+  const { filtered, warnings } = filterSuspicious(enriched, args.chunk.text);
   return { ...filtered, warnings };
 }
 
@@ -94,6 +97,13 @@ function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }
   const dropped = new Set<string>();
 
   for (const n of normalized.nodes) {
+    // Drop very trivial nodes (no label, tiny content, generic title)
+    if (isTrivial(n)) {
+      dropped.add(n.id);
+      warnings.push(`已丢弃 trivial 节点: ${n.type} ${n.title} (${n.id})`);
+      continue;
+    }
+
     if (n.type === "Formula") {
       const content = (n.content ?? "").trim();
       const title = (n.title ?? "").trim();
@@ -104,7 +114,11 @@ function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }
       const titleLooksLikeNarrative = title.length >= 8 && /[\u4e00-\u9fff]/.test(title) && !/(\(|\)|\\|=|\$|_|\^)/.test(title);
       const titleInChunk = title && chunkText.includes(title);
 
-      if (!grounded || (titleLooksLikeNarrative && !titleInChunk)) {
+      // Avoid splitting out formulas from inside Example/Exercise unless labeled.
+      const hasLabel = typeof n.source?.latexLabel === "string" || n.id.startsWith("tex:");
+      const insideExampleOrExercise = !hasLabel && isFormulaInsideExampleExercise(chunkText, content);
+
+      if (!grounded || insideExampleOrExercise || (titleLooksLikeNarrative && !titleInChunk)) {
         dropped.add(n.id);
         warnings.push(`已丢弃可疑 Formula: ${n.title} (${n.id})`);
         continue;
@@ -131,5 +145,93 @@ function looksLikeMath(s: string) {
   if (/[=<>]/.test(s) && /[a-zA-Z\\]/.test(s)) return true;
   if (/[0-9]/.test(s) && /[_^]/.test(s)) return true;
   return false;
+}
+
+function isTrivial(n: GraphNode) {
+  const hasLabel = typeof n.source?.latexLabel === "string" || n.id.startsWith("tex:");
+  if (hasLabel) return false;
+  const title = (n.title ?? "").trim();
+  const content = (n.content ?? "").trim();
+  if (n.type === "Example" || n.type === "Exercise") return false; // keep as containers
+  if (n.type === "Formula") return false; // handled elsewhere
+  const genericTitle = /^(Theorem|Lemma|Corollary|Definition|Axiom|Proposition|Conclusion)\s*\d+$/i.test(title);
+  const tooShort = content.length > 0 && content.length < 40 && !/\\(begin|frac|sum|int|label|ref)\b/.test(content);
+  return genericTitle && tooShort;
+}
+
+function isFormulaInsideExampleExercise(chunkText: string, formulaContent: string) {
+  if (!formulaContent || formulaContent.length < 8) return false;
+  const blocks = [...chunkText.matchAll(/\\begin\{(example|exercise)\}([\s\S]*?)\\end\{\1\}/gi)].map((m) => m[2] ?? "");
+  return blocks.some((b) => b.includes(formulaContent));
+}
+
+function annotateExampleExercise(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }) {
+  const nodes = normalized.nodes.map((n) => {
+    if (n.type !== "Example" && n.type !== "Exercise") return n;
+    const c = (n.content ?? "").trim();
+    if (!c) return n;
+    const parts = splitExampleExercise(c);
+    if (!parts) return n;
+    return {
+      ...n,
+      meta: {
+        ...(n.meta ?? {}),
+        problem: parts.problem,
+        solution: parts.solution,
+        answer: parts.answer
+      }
+    };
+  });
+  return { ...normalized, nodes };
+}
+
+function splitExampleExercise(content: string) {
+  // Prefer explicit environments if present
+  const solEnv = content.match(/\\begin\{solution\}([\s\S]*?)\\end\{solution\}/i);
+  const ansEnv = content.match(/\\begin\{answer\}([\s\S]*?)\\end\{answer\}/i);
+  if (solEnv || ansEnv) {
+    const solution = solEnv?.[1]?.trim() ?? "";
+    const answer = ansEnv?.[1]?.trim() ?? "";
+    const problem = content
+      .replace(solEnv?.[0] ?? "", "")
+      .replace(ansEnv?.[0] ?? "", "")
+      .trim();
+    return { problem, solution, answer };
+  }
+
+  // Chinese markers: 解答 / 证明 / 答案
+  const idxSol = content.search(/\n\s*(解答|解|证明)\s*[:：]?\s*\n/);
+  const idxAns = content.search(/\n\s*(答案)\s*[:：]?\s*\n/);
+  if (idxSol >= 0 || idxAns >= 0) {
+    const cut = (i: number) => (i >= 0 ? i : content.length);
+    const pEnd = Math.min(cut(idxSol), cut(idxAns));
+    const problem = content.slice(0, pEnd).trim();
+    let solution = "";
+    let answer = "";
+    if (idxSol >= 0) {
+      const solEnd = idxAns >= 0 && idxAns > idxSol ? idxAns : content.length;
+      solution = content.slice(idxSol, solEnd).trim();
+    }
+    if (idxAns >= 0) {
+      answer = content.slice(idxAns).trim();
+    }
+    return { problem, solution, answer };
+  }
+
+  return null;
+}
+
+function applyPatches(
+  normalized: { nodes: GraphNode[]; edges: GraphEdge[] },
+  patches: { id: string; patch: Partial<GraphNode> }[]
+) {
+  if (!patches.length) return normalized;
+  const map = new Map(patches.map((p) => [p.id, p.patch] as const));
+  const nodes = normalized.nodes.map((n) => {
+    const p = map.get(n.id);
+    if (!p) return n;
+    return { ...n, ...p, meta: { ...(n.meta ?? {}), ...(p as any).meta } };
+  });
+  return { ...normalized, nodes };
 }
 

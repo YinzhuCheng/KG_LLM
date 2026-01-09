@@ -44,6 +44,16 @@ export function heuristicExtractFromChunk(args: {
   const envNodes = extractEnvironments(chunk, selectedEntities, knownLabelToNodeId);
   nodes.push(...envNodes);
 
+  // add structured fields for Example/Exercise but keep content intact in the same node
+  for (const n of envNodes) {
+    if (n.type === "Example" || n.type === "Exercise") {
+      const parts = splitExampleExercise(n.content ?? "");
+      if (parts) {
+        n.meta = { ...(n.meta ?? {}), problem: parts.problem, solution: parts.solution, answer: parts.answer };
+      }
+    }
+  }
+
   // 1.1) Bind Example/Exercise to nearest previous core node (best-effort)
   const coreTypes: EntityType[] = ["Theorem", "Lemma", "Corollary", "Definition", "Axiom", "Proposition", "Conclusion", "Formula"];
   let lastCore: GraphNode | null = null;
@@ -149,6 +159,7 @@ function extractEnvironments(chunk: LatexChunk, selectedEntities: EntityType[], 
 
 function extractFormulas(chunk: LatexChunk, knownLabelToNodeId: Map<string, string>) {
   const out: GraphNode[] = [];
+  const exRanges = getExampleExerciseRanges(chunk.text);
   const patterns = [
     /\\begin\{equation\}([\s\S]*?)\\end\{equation\}/gi,
     /\\begin\{align\}([\s\S]*?)\\end\{align\}/gi,
@@ -161,6 +172,11 @@ function extractFormulas(chunk: LatexChunk, knownLabelToNodeId: Map<string, stri
       const body = (m[1] ?? "").trim();
       if (!body) continue;
       const label = extractFirstLabel(body);
+      // Avoid splitting formulas out of Example/Exercise unless labeled.
+      const matchIndex = (m as any).index as number | undefined;
+      if (!label && typeof matchIndex === "number" && isWithinRanges(matchIndex, exRanges)) {
+        continue;
+      }
       const id = label ? `tex:${label}` : `${chunk.id}:formula:${idx++}`;
       const title = label ? `Formula (${label})` : `Formula ${idx}`;
       out.push({
@@ -209,5 +225,48 @@ function dedupeEdges(edges: GraphEdge[]) {
   const map = new Map<string, GraphEdge>();
   for (const e of edges) map.set(key(e), e);
   return [...map.values()];
+}
+
+function splitExampleExercise(content: string) {
+  const c = (content ?? "").trim();
+  if (!c) return null;
+  const solEnv = c.match(/\\begin\{solution\}([\s\S]*?)\\end\{solution\}/i);
+  const ansEnv = c.match(/\\begin\{answer\}([\s\S]*?)\\end\{answer\}/i);
+  if (solEnv || ansEnv) {
+    const solution = solEnv?.[1]?.trim() ?? "";
+    const answer = ansEnv?.[1]?.trim() ?? "";
+    const problem = c.replace(solEnv?.[0] ?? "", "").replace(ansEnv?.[0] ?? "", "").trim();
+    return { problem, solution, answer };
+  }
+  const idxSol = c.search(/\n\s*(解答|解|证明)\s*[:：]?\s*\n/);
+  const idxAns = c.search(/\n\s*(答案)\s*[:：]?\s*\n/);
+  if (idxSol >= 0 || idxAns >= 0) {
+    const cut = (i: number) => (i >= 0 ? i : c.length);
+    const pEnd = Math.min(cut(idxSol), cut(idxAns));
+    const problem = c.slice(0, pEnd).trim();
+    let solution = "";
+    let answer = "";
+    if (idxSol >= 0) {
+      const solEnd = idxAns >= 0 && idxAns > idxSol ? idxAns : c.length;
+      solution = c.slice(idxSol, solEnd).trim();
+    }
+    if (idxAns >= 0) answer = c.slice(idxAns).trim();
+    return { problem, solution, answer };
+  }
+  return null;
+}
+
+function getExampleExerciseRanges(text: string) {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const re = /\\begin\{(example|exercise)\}[\s\S]*?\\end\{\1\}/gi;
+  for (const m of text.matchAll(re)) {
+    const idx = (m as any).index as number | undefined;
+    if (typeof idx === "number") ranges.push({ start: idx, end: idx + (m[0]?.length ?? 0) });
+  }
+  return ranges;
+}
+
+function isWithinRanges(pos: number, ranges: Array<{ start: number; end: number }>) {
+  return ranges.some((r) => pos >= r.start && pos <= r.end);
 }
 

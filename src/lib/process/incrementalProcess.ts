@@ -4,6 +4,7 @@ import { heuristicExtractFromChunk } from "../extract/heuristicExtract";
 import { llmExtractFromChunk } from "../extract/llmExtract";
 import { LlmConfig, UserSchemaSelection } from "../../state/store";
 import { useAppStore } from "../../state/store";
+import { saveSnapshot } from "../cache/snapshots";
 
 export async function runIncrementalExtraction(args: {
   chunks: LatexChunk[];
@@ -127,6 +128,23 @@ export async function runIncrementalExtraction(args: {
       store.mergeGraph({ nodes: ready.nodes as any, edges: ready.edges as any });
       nextToCommit++;
       store.setProcessing({ doneChunks: nextToCommit });
+
+      // every 10 LLM calls (committed chunks) => snapshot
+      if (nextToCommit % 10 === 0) {
+        try {
+          const s = useAppStore.getState();
+          saveSnapshot({
+            graph: s.graph,
+            schema: s.schema,
+            view: s.view,
+            llm: s.llm,
+            note: `auto@${nextToCommit}`
+          });
+          s.setInfo(`已自动保存缓存点（LLM 调用累计 ${nextToCommit} 次）`);
+        } catch {
+          // ignore cache failures (quota)
+        }
+      }
     }
 
     if (abortController.signal.aborted) {

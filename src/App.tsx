@@ -3,15 +3,20 @@ import { UploadPanel } from "./components/UploadPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { ExportImportPanel } from "./components/ExportImportPanel";
 import { GraphView } from "./components/GraphView";
+import { ViewOptionsPanel } from "./components/ViewOptionsPanel";
+import { CachePanel } from "./components/CachePanel";
 import { useAppStore } from "./state/store";
 import { buildCytoscapeElements } from "./lib/graph/buildCytoscapeElements";
+import { filterGraphView } from "./lib/graph/filterGraphView";
 
 export function App() {
   const graph = useAppStore((s) => s.graph);
+  const view = useAppStore((s) => s.view);
   const processing = useAppStore((s) => s.processing);
   const lastError = useAppStore((s) => s.lastError);
   const lastInfo = useAppStore((s) => s.lastInfo);
-  const cytoElements = useMemo(() => buildCytoscapeElements(graph), [graph]);
+  const filteredGraph = useMemo(() => filterGraphView(graph, view), [graph, view]);
+  const cytoElements = useMemo(() => buildCytoscapeElements(filteredGraph), [filteredGraph]);
   const graphApiRef = useRef<{ fit: () => void; center: () => void } | null>(null);
 
   return (
@@ -27,7 +32,9 @@ export function App() {
 
         <UploadPanel />
         <SettingsPanel />
+        <ViewOptionsPanel />
         <ExportImportPanel onAfterImport={() => graphApiRef.current?.fit()} />
+        <CachePanel />
       </aside>
 
       <main className="main">

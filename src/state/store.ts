@@ -31,6 +31,11 @@ type AppState = {
 
   schema: UserSchemaSelection;
   llm: LlmConfig;
+  view: {
+    showExamples: boolean;
+    showExercises: boolean;
+    showIsolated: boolean;
+  };
 
   processing: {
     status: ProcessingStatus;
@@ -48,6 +53,7 @@ type AppState = {
 
   setSchema: (patch: Partial<UserSchemaSelection>) => void;
   setLlm: (patch: Partial<LlmConfig>) => void;
+  setView: (patch: Partial<AppState["view"]>) => void;
 
   setLatexFiles: (files: { path: string; content: string }[]) => void;
   setAssets: (assets: Record<string, string>) => void;
@@ -81,6 +87,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     maxTokens: 100000,
     parallelism: 4
   },
+  view: { showExamples: true, showExercises: true, showIsolated: true },
   processing: { status: "idle", totalChunks: 0, doneChunks: 0 },
   lastError: null,
   lastInfo: null,
@@ -90,6 +97,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSchema: (patch) => set({ schema: { ...get().schema, ...patch } }),
   setLlm: (patch) => set({ llm: { ...get().llm, ...patch } }),
+  setView: (patch) => set({ view: { ...get().view, ...patch } }),
 
   setLatexFiles: (files) => set({ latexFiles: files }),
   setAssets: (assets) => set({ assets }),

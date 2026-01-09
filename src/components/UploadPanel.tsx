@@ -11,7 +11,7 @@ export function UploadPanel() {
   const llm = useAppStore((s) => s.llm);
 
   const [localWarn, setLocalWarn] = useState<string[]>([]);
-  const [maxChars, setMaxChars] = useState(6000);
+  const [maxChars, setMaxChars] = useState(20000);
 
   const disabled = processing.status !== "idle" && processing.status !== "done" && processing.status !== "stopped" && processing.status !== "error";
 
@@ -90,7 +90,7 @@ export function UploadPanel() {
             {localWarn.slice(0, 6).map((w, i) => (
               <li key={i}>{w}</li>
             ))}
-            {localWarn.length > 6 ? <li>... 还有 {localWarn.length - 6} 条</li> : null}
+            {localWarn.length > 6 ? <li>还有 {localWarn.length - 6} 条（为避免刷屏未全部展示）</li> : null}
           </ul>
         </div>
       ) : null}
