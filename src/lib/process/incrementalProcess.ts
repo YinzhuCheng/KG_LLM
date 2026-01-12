@@ -5,6 +5,8 @@ import { llmExtractFromChunk } from "../extract/llmExtract";
 import { LlmConfig, UserSchemaSelection } from "../../state/store";
 import { useAppStore } from "../../state/store";
 import { saveSnapshot } from "../cache/snapshots";
+import { alignConceptsWithLlm } from "../extract/alignConcepts";
+import { pruneGraphForCleanliness } from "./pruneGraph";
 
 const PHASE1_ENTITY_TYPES: EntityType[] = ["Definition", "Notation", "Construction"];
 
@@ -57,8 +59,14 @@ export async function runIncrementalExtraction(args: {
         store.setProcessing({ doneChunks: i + 1 });
       }
 
+      // Clean graph: drop local-only noisy formulas.
+      const pruned = pruneGraphForCleanliness(useAppStore.getState().graph);
+      store.setGraph(pruned.graph);
+      if (pruned.stats.droppedNodeIds.length) {
+        store.setInfo(`处理完成（启发式）。已清理局部噪声节点：${pruned.stats.droppedNodeIds.length} 个 Formula`);
+      }
       store.setProcessing({ status: "done", abortController: undefined });
-      store.setInfo("处理完成（启发式）");
+      if (!pruned.stats.droppedNodeIds.length) store.setInfo("处理完成（启发式）");
       return;
     }
 
@@ -119,7 +127,20 @@ export async function runIncrementalExtraction(args: {
     }
 
     // Freeze namespace: canonicalize ids for phase-1 concepts (conservative).
-    const frozen = freezeNamespace(useAppStore.getState().graph);
+    // Alignment stage (separate from extraction): ask LLM to align phase-1 concepts conservatively, using compact cards.
+    let alignedAlias = new Map<string, string>();
+    try {
+      const aligned = await alignConceptsWithLlm({
+        llm: args.llm,
+        nodes: useAppStore.getState().graph.nodes,
+        signal: abortController.signal
+      });
+      alignedAlias = aligned.aliasToCanonical;
+    } catch (e: any) {
+      warningsAll.push(`概念对齐阶段失败（将仅用规则冻结命名空间）：${String(e?.message ?? e)}`);
+    }
+
+    const frozen = freezeNamespace(useAppStore.getState().graph, alignedAlias);
     store.setGraph(frozen.graph as any);
 
     // rebuild label index after freeze
@@ -230,6 +251,11 @@ export async function runIncrementalExtraction(args: {
       return;
     }
 
+    // Clean graph: drop local-only noisy formulas.
+    const pruned = pruneGraphForCleanliness(useAppStore.getState().graph);
+    store.setGraph(pruned.graph);
+    if (pruned.stats.droppedNodeIds.length) warningsAll.push(`已清理局部噪声节点：${pruned.stats.droppedNodeIds.length} 个 Formula`);
+
     store.setProcessing({ status: "done", abortController: undefined });
     store.setInfo(warningsAll.length ? `处理完成（LLM）。过滤/告警：${warningsAll.slice(0, 2).join("；")}${warningsAll.length > 2 ? `…（共 ${warningsAll.length} 条）` : ""}` : "处理完成（LLM）");
   } catch (e: any) {
@@ -246,10 +272,11 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-function freezeNamespace(graph: { nodes: any[]; edges: any[] }) {
+function freezeNamespace(graph: { nodes: any[]; edges: any[] }, alignedAliasToCanonical?: Map<string, string>) {
   // Conservative aliasing:
   // 1) unify nodes that share the same latexLabel (prefer tex:<label>)
   // 2) unify Phase-1 concepts linked by EquivalentTo
+  // 3) unify Phase-1 concepts aligned by the dedicated alignment stage (LLM-based, high precision)
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
 
@@ -276,6 +303,17 @@ function freezeNamespace(graph: { nodes: any[]; edges: any[] }) {
     if (!a || !b) continue;
     if (!PHASE1_ENTITY_TYPES.includes(a.type) || !PHASE1_ENTITY_TYPES.includes(b.type)) continue;
     uf.union(e.source, e.target);
+  }
+
+  // Alignment stage unions (only phase-1 types, both must exist)
+  if (alignedAliasToCanonical && alignedAliasToCanonical.size) {
+    for (const [alias, canonical] of alignedAliasToCanonical.entries()) {
+      const a = byId.get(alias);
+      const b = byId.get(canonical);
+      if (!a || !b) continue;
+      if (!PHASE1_ENTITY_TYPES.includes(a.type) || !PHASE1_ENTITY_TYPES.includes(b.type)) continue;
+      uf.union(alias, canonical);
+    }
   }
 
   // choose canonical representative (prefer tex:)
