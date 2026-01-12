@@ -57,26 +57,13 @@ export function UploadPanel() {
 
   return (
     <div className="card">
-      <div className="h1">上传 LaTeX（支持文件夹 / zip / 多文件）</div>
+      <div className="h1">上传 LaTeX（仅支持 zip：包含 .tex 与图片）</div>
       <div className="muted">
-        方式 1：上传 zip（包含 .tex 与图片文件夹）；
-        方式 2：选择文件夹上传（会保留路径）；
-        方式 3：直接上传多个文件。
+        请上传一个 zip 文件（包含 .tex 与图片文件）。本工具会保留 zip 内部路径用于定位来源。
       </div>
 
-      <div className="label">上传（zip / 多文件）</div>
-      <input className="input" type="file" multiple onChange={(e) => onFilesPicked(e.target.files)} disabled={disabled} />
-
-      <div className="label">上传（文件夹）</div>
-      <input
-        className="input"
-        type="file"
-        multiple
-        webkitdirectory="true"
-        directory="true"
-        onChange={(e) => onFilesPicked(e.target.files)}
-        disabled={disabled}
-      />
+      <div className="label">上传 zip</div>
+      <input className="input" type="file" accept=".zip,application/zip" onChange={(e) => onFilesPicked(e.target.files)} disabled={disabled} />
 
       <div className="label">切分粒度（按章节层级）</div>
       <select className="input" value={granularity} onChange={(e) => setGranularity(e.target.value as ChunkGranularity)} disabled={disabled}>

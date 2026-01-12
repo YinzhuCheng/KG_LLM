@@ -42,6 +42,10 @@ type AppState = {
     totalChunks: number;
     doneChunks: number;
     currentChunkTitle?: string;
+    stage?: string; // e.g. "Phase 1", "Alignment", "Freeze/Merge", "Phase 2", "Prune"
+    stageDetail?: string; // short human-readable explanation
+    stageNodes?: number; // graph nodes after last stage update
+    stageEdges?: number; // graph edges after last stage update
     abortController?: AbortController;
   };
 
@@ -77,7 +81,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   latexFiles: [],
   schema: { entityTypes: defaultEntityTypes, relationTypes: defaultRelationTypes, notes: "" },
   llm: {
-    enabled: false,
+    enabled: true,
     protocol: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-5",

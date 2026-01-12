@@ -1,6 +1,6 @@
 import { EntityType, RelationType } from "../graph/types";
 import { LatexChunk } from "../latex/chunkLatex";
-import { heuristicExtractFromChunk } from "../extract/heuristicExtract";
+// LLM is mandatory; heuristic extraction is intentionally not used.
 import { llmExtractFromChunk } from "../extract/llmExtract";
 import { LlmConfig, UserSchemaSelection } from "../../state/store";
 import { useAppStore } from "../../state/store";
@@ -18,9 +18,14 @@ export async function runIncrementalExtraction(args: {
   const store = useAppStore.getState();
   store.setError(null);
   store.setInfo(null);
-  const useLlm = args.llm.enabled && args.llm.apiKey.trim().length > 0;
-  const total = useLlm ? args.chunks.length * 2 : args.chunks.length;
-  store.setProcessing({ status: "extracting", totalChunks: total, doneChunks: 0 });
+  const useLlm = true;
+  const apiKey = args.llm.apiKey.trim();
+  if (!apiKey) {
+    store.setProcessing({ status: "error", totalChunks: 0, doneChunks: 0, stage: "配置", stageDetail: "缺少 API Key" });
+    store.setError("LLM 已设为必选：请在设置里填写 API Key。");
+    return;
+  }
+  store.setProcessing({ status: "extracting", totalChunks: 0, doneChunks: 0, stage: "准备", stageDetail: "初始化" });
 
   const abortController = new AbortController();
   store.setProcessing({ abortController });
@@ -33,43 +38,6 @@ export async function runIncrementalExtraction(args: {
   }
 
   try {
-    if (!useLlm) {
-      for (let i = 0; i < args.chunks.length; i++) {
-        if (abortController.signal.aborted) {
-          useAppStore.getState().setProcessing({ status: "stopped", abortController: undefined });
-          return;
-        }
-
-        const chunk = args.chunks[i];
-        store.setProcessing({ currentChunkTitle: chunk.title });
-
-        const extracted = heuristicExtractFromChunk({
-          chunk,
-          selectedEntities: args.schema.entityTypes as EntityType[],
-          selectedRelations: args.schema.relationTypes as RelationType[],
-          knownLabelToNodeId
-        });
-
-        for (const n of extracted.nodes) {
-          const label = typeof n?.source?.latexLabel === "string" ? n.source.latexLabel : null;
-          if (label) knownLabelToNodeId.set(label, n.id);
-        }
-
-        store.mergeGraph({ nodes: extracted.nodes as any, edges: extracted.edges as any });
-        store.setProcessing({ doneChunks: i + 1 });
-      }
-
-      // Clean graph: drop local-only noisy formulas.
-      const pruned = pruneGraphForCleanliness(useAppStore.getState().graph);
-      store.setGraph(pruned.graph);
-      if (pruned.stats.droppedNodeIds.length) {
-        store.setInfo(`处理完成（启发式）。已清理局部噪声节点：${pruned.stats.droppedNodeIds.length} 个 Formula`);
-      }
-      store.setProcessing({ status: "done", abortController: undefined });
-      if (!pruned.stats.droppedNodeIds.length) store.setInfo("处理完成（启发式）");
-      return;
-    }
-
     // LLM mode: two-phase extraction
     const warningsAll: string[] = [];
 
@@ -85,6 +53,15 @@ export async function runIncrementalExtraction(args: {
     };
 
     // Phase 1 — sequential (strict single-thread)
+    store.setProcessing({
+      stage: "Phase 1",
+      stageDetail: "串行抽取基础概念（Definition/Notation/Construction）",
+      totalChunks: args.chunks.length,
+      doneChunks: 0,
+      currentChunkTitle: undefined,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
     for (let i = 0; i < args.chunks.length; i++) {
       if (abortController.signal.aborted) {
         store.setProcessing({ status: "stopped", abortController: undefined });
@@ -123,11 +100,21 @@ export async function runIncrementalExtraction(args: {
       }
       if (Array.isArray(res.warnings)) warningsAll.push(...res.warnings);
       store.mergeGraph({ nodes: res.nodes as any, edges: res.edges as any });
-      store.setProcessing({ doneChunks: i + 1 });
+      const g = useAppStore.getState().graph;
+      store.setProcessing({ doneChunks: i + 1, stageNodes: g.nodes.length, stageEdges: g.edges.length });
     }
 
     // Freeze namespace: canonicalize ids for phase-1 concepts (conservative).
     // Alignment stage (separate from extraction): ask LLM to align phase-1 concepts conservatively, using compact cards.
+    store.setProcessing({
+      stage: "Alignment",
+      stageDetail: "LLM 对齐同义概念（alias → canonical）",
+      totalChunks: 1,
+      doneChunks: 0,
+      currentChunkTitle: undefined,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
     let alignedAlias = new Map<string, string>();
     try {
       const aligned = await alignConceptsWithLlm({
@@ -137,11 +124,28 @@ export async function runIncrementalExtraction(args: {
       });
       alignedAlias = aligned.aliasToCanonical;
     } catch (e: any) {
-      warningsAll.push(`概念对齐阶段失败（将仅用规则冻结命名空间）：${String(e?.message ?? e)}`);
+      store.setProcessing({ status: "error", abortController: undefined });
+      store.setError(`概念对齐阶段失败：${String(e?.message ?? e)}`);
+      return;
     }
+    store.setProcessing({ doneChunks: 1, stageNodes: useAppStore.getState().graph.nodes.length, stageEdges: useAppStore.getState().graph.edges.length });
 
+    store.setProcessing({
+      stage: "Merge/Freeze",
+      stageDetail: "冻结命名空间并合并基础概念（显式程序）",
+      totalChunks: 1,
+      doneChunks: 0,
+      currentChunkTitle: undefined,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
     const frozen = freezeNamespace(useAppStore.getState().graph, alignedAlias);
     store.setGraph(frozen.graph as any);
+    store.setProcessing({
+      doneChunks: 1,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
 
     // rebuild label index after freeze
     knownLabelToNodeId.clear();
@@ -151,12 +155,20 @@ export async function runIncrementalExtraction(args: {
     }
 
     // Phase 2 — bounded concurrency + ordered merge (extract remaining entities/relations)
+    store.setProcessing({
+      stage: "Phase 2",
+      stageDetail: "并行抽取其余实体/关系 + 有序合并",
+      totalChunks: args.chunks.length,
+      doneChunks: 0,
+      currentChunkTitle: undefined,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
     const concurrency = Math.max(1, Math.min(32, Math.floor(args.llm.parallelism || 1)));
     const results = new Map<number, { nodes: any[]; edges: any[]; warnings?: string[] }>();
     let nextToDispatch = 0;
     let nextToCommit = 0;
     let inFlight = 0;
-    const phase2Offset = args.chunks.length;
 
     const phase2Entities = (args.schema.entityTypes as EntityType[]).filter((t) => !PHASE1_ENTITY_TYPES.includes(t));
     const phase2Relations = args.schema.relationTypes as RelationType[];
@@ -225,10 +237,11 @@ export async function runIncrementalExtraction(args: {
 
       store.mergeGraph({ nodes: mapped.nodes as any, edges: mapped.edges as any });
       nextToCommit++;
-      store.setProcessing({ doneChunks: phase2Offset + nextToCommit });
+      const g = useAppStore.getState().graph;
+      store.setProcessing({ doneChunks: nextToCommit, stageNodes: g.nodes.length, stageEdges: g.edges.length });
 
       // every 10 LLM calls (committed chunks) => snapshot
-      const committedCalls = phase2Offset + nextToCommit;
+      const committedCalls = nextToCommit;
       if (committedCalls % 10 === 0) {
         try {
           const s = useAppStore.getState();
@@ -251,10 +264,23 @@ export async function runIncrementalExtraction(args: {
       return;
     }
 
-    // Clean graph: drop local-only noisy formulas.
+    store.setProcessing({
+      stage: "Prune",
+      stageDetail: "清理局部噪声（干净图谱）",
+      totalChunks: 1,
+      doneChunks: 0,
+      currentChunkTitle: undefined,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
     const pruned = pruneGraphForCleanliness(useAppStore.getState().graph);
     store.setGraph(pruned.graph);
     if (pruned.stats.droppedNodeIds.length) warningsAll.push(`已清理局部噪声节点：${pruned.stats.droppedNodeIds.length} 个 Formula`);
+    store.setProcessing({
+      doneChunks: 1,
+      stageNodes: useAppStore.getState().graph.nodes.length,
+      stageEdges: useAppStore.getState().graph.edges.length
+    });
 
     store.setProcessing({ status: "done", abortController: undefined });
     store.setInfo(warningsAll.length ? `处理完成（LLM）。过滤/告警：${warningsAll.slice(0, 2).join("；")}${warningsAll.length > 2 ? `…（共 ${warningsAll.length} 条）` : ""}` : "处理完成（LLM）");

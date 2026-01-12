@@ -25,8 +25,7 @@ export function App() {
         <div className="card">
           <div className="h1">LaTeX → 知识图谱（全前端 / Cloudflare Pages）</div>
           <div className="muted">
-            上传 LaTeX（可含图片文件夹/zip），按章节切分增量抽取实体/关系并实时渲染。可选接入 GPT-5 等多协议 LLM，
-            或使用本地启发式抽取（无需任何 API）。
+            上传 LaTeX zip（包含 .tex 与图片），按章节切分增量抽取实体/关系并实时渲染。LLM 为必选（浏览器直连）。
           </div>
         </div>
 
@@ -43,6 +42,12 @@ export function App() {
             <span className={`pill ${processing.status === "idle" ? "" : "ok"}`}>
               状态: <span className="mono">{processing.status}</span>
             </span>
+            {processing.stage ? (
+              <span className="pill ok">
+                阶段: <span className="mono">{processing.stage}</span>
+                {processing.stageDetail ? <span className="mono"> · {processing.stageDetail}</span> : null}
+              </span>
+            ) : null}
             <span className="pill">
               节点: <span className="mono">{graph.nodes.length}</span>
             </span>
@@ -53,6 +58,17 @@ export function App() {
               <span className="pill ok">
                 进度: <span className="mono">{processing.doneChunks}</span> /{" "}
                 <span className="mono">{processing.totalChunks}</span>
+              </span>
+            ) : null}
+            {processing.currentChunkTitle ? (
+              <span className="pill">
+                当前: <span className="mono">{processing.currentChunkTitle}</span>
+              </span>
+            ) : null}
+            {typeof processing.stageNodes === "number" && typeof processing.stageEdges === "number" ? (
+              <span className="pill">
+                阶段成果: <span className="mono">{processing.stageNodes}</span> nodes /{" "}
+                <span className="mono">{processing.stageEdges}</span> edges
               </span>
             ) : null}
             {lastError ? (

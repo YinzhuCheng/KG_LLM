@@ -45,7 +45,7 @@ export function SettingsPanel() {
     <div className="card">
       <div className="h1">实体/关系自定义 + LLM 配置（可选）</div>
       <div className="muted">
-        你可以从“实体/关系总集合”中勾选需要抽取的类型。LLM 模式会根据上下文决定具体语义；未启用 LLM 时使用本地启发式抽取。
+        你可以从“实体/关系总集合”中勾选需要抽取的类型。抽取流程将强制使用 LLM（不再支持本地启发式）。
         <br />
         注意：浏览器直连第三方 LLM 可能遇到 CORS/Key 暴露风险（本工具不存储 Key）。
       </div>
@@ -101,20 +101,8 @@ export function SettingsPanel() {
         placeholder="例如：将“结论”仅用于最终章节；将“DerivedFrom”用于公式推导链..."
       />
 
-      <div className="label">启用 LLM（可选）</div>
-      <label className="pill" style={{ cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={llm.enabled}
-          onChange={(e) => useAppStore.getState().setLlm({ enabled: e.target.checked })}
-          disabled={disabled}
-          style={{ marginRight: 6 }}
-        />
-        使用 LLM 抽取（否则启发式）
-      </label>
-
-      {llm.enabled ? (
-        <>
+      <div className="label">LLM 配置（必填）</div>
+      <>
           <div className="label">协议（openai / claude / gemini）</div>
           <select
             className="input"
@@ -237,8 +225,7 @@ export function SettingsPanel() {
               <textarea className="input mono" value={testMsg} readOnly />
             </>
           ) : null}
-        </>
-      ) : null}
+      </>
     </div>
   );
 }
