@@ -7,8 +7,14 @@ export function buildExtractionPrompt(args: {
   selectedRelations: RelationType[];
   graphSummary: string;
   userNotes?: string;
+  phase?: 1 | 2;
+  frozenNamespace?: boolean;
+  conceptRegistrySummary?: string;
 }) {
   const { chunk, selectedEntities, selectedRelations, graphSummary, userNotes } = args;
+  const phase = args.phase ?? 0;
+  const frozenNamespace = Boolean(args.frozenNamespace);
+  const conceptRegistrySummary = (args.conceptRegistrySummary ?? "").trim();
   return `
 你是一个“LaTeX 数学知识图谱抽取器”。从给定 LaTeX 片段中抽取实体与关系，输出严格 JSON（不要 markdown，不要解释）。
 
@@ -17,6 +23,18 @@ ${selectedEntities.map((t) => `- ${t}`).join("\n")}
 
 ## 关系集合（仅可使用下列类型）
 ${selectedRelations.map((t) => `- ${t}`).join("\n")}
+
+${phase === 1 ? `## Phase 1 — Sequential（Build the universe）
+- **只抽取**：Definitions / Notations / Basic constructions（对应本次实体集合中出现的相关类型）
+- **严格要求**：命名必须稳定可复用；优先复用已有 id（见“概念注册表”与“现有图谱摘要”），不要为同一概念创建多个不同 id。
+` : phase === 2 ? `## Phase 2 — Parallel（Extract the rest）
+- 抽取除基础概念之外的其他实体与关系；基础概念应尽量通过 **引用已存在 id** 来连接。
+${frozenNamespace ? "- **命名空间已冻结**：若某概念已在注册表/摘要中出现，必须复用其 id；不要新建同义节点。" : ""}
+` : ""}
+
+${conceptRegistrySummary ? `## 概念注册表（全局，优先复用 id）
+${conceptRegistrySummary}
+` : ""}
 
 ## 目标
 - 尽量识别：定理/引理/推论/定义/公式/例题/习题/公理/命题/结论（名称、编号、label、关键公式）

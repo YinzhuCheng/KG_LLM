@@ -22,6 +22,9 @@ export async function llmExtractFromChunk(args: {
   graph: { nodes: GraphNode[]; edges: GraphEdge[] };
   userNotes?: string;
   signal?: AbortSignal;
+  phase?: 1 | 2;
+  frozenNamespace?: boolean;
+  conceptRegistrySummary?: string;
 }) {
   const graphSummary = summarizeGraphForLlm(args.graph, 160);
   const prompt = buildExtractionPrompt({
@@ -29,7 +32,10 @@ export async function llmExtractFromChunk(args: {
     selectedEntities: args.selectedEntities,
     selectedRelations: args.selectedRelations,
     graphSummary,
-    userNotes: args.userNotes
+    userNotes: args.userNotes,
+    phase: args.phase,
+    frozenNamespace: args.frozenNamespace,
+    conceptRegistrySummary: args.conceptRegistrySummary
   });
 
   const common = {
