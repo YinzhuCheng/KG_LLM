@@ -38,18 +38,8 @@ export async function readUploads(args: { files: File[] }): Promise<UploadResult
       continue;
     }
 
-    if (ext === "tex") {
-      const content = await f.text();
-      latexFiles.push({ path: relPath, content });
-      continue;
-    }
-
-    if (IMAGE_EXT.has(ext)) {
-      assets[relPath] = URL.createObjectURL(f);
-      continue;
-    }
-
-    warnings.push(`已忽略不支持的文件: ${relPath}`);
+    // For a cleaner UX, only accept zip upload.
+    warnings.push(`已忽略文件（仅支持上传 zip）：${relPath}`);
   }
 
   if (latexFiles.length === 0) warnings.push("未检测到任何 .tex 文件。");

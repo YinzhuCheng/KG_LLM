@@ -3,6 +3,8 @@ export type EntityType =
   | "Lemma"
   | "Corollary"
   | "Definition"
+  | "Notation"
+  | "Construction"
   | "Formula"
   | "Example"
   | "Exercise"
