@@ -26,7 +26,7 @@ export async function llmExtractFromChunk(args: {
   frozenNamespace?: boolean;
   conceptRegistrySummary?: string;
 }) {
-  const graphSummary = summarizeGraphForLlm(args.graph, 160);
+  const graphSummary = summarizeGraphForLlm(args.graph, 160, args.chunk);
   const prompt = buildExtractionPrompt({
     chunk: args.chunk,
     selectedEntities: args.selectedEntities,
@@ -59,7 +59,8 @@ export async function llmExtractFromChunk(args: {
   const normalized = normalizeLlmResult(result);
   const completed = applyPatches(normalized, completeNodeLatexFromChunk(normalized.nodes, args.chunk.text));
   const enriched = annotateExampleExercise(completed);
-  const { filtered, warnings } = filterSuspicious(enriched, args.chunk.text);
+  const existingNodeIds = new Set((args.graph?.nodes ?? []).map((n) => n.id));
+  const { filtered, warnings } = filterSuspicious(enriched, args.chunk.text, existingNodeIds);
   return { ...filtered, warnings };
 }
 
@@ -96,7 +97,7 @@ function normalizeLlmResult(result: any): { nodes: GraphNode[]; edges: GraphEdge
   };
 }
 
-function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }, chunkText: string) {
+function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }, chunkText: string, existingNodeIds: Set<string>) {
   const warnings: string[] = [];
 
   const keptNodes: GraphNode[] = [];
@@ -134,7 +135,9 @@ function filterSuspicious(normalized: { nodes: GraphNode[]; edges: GraphEdge[] }
   }
 
   const keptNodeIds = new Set(keptNodes.map((n) => n.id));
-  const keptEdges = normalized.edges.filter((e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target));
+  const exists = (id: string) => keptNodeIds.has(id) || existingNodeIds.has(id);
+  // IMPORTANT: keep cross-chunk edges that point to existing graph ids (LLM is allowed to reference them).
+  const keptEdges = normalized.edges.filter((e) => exists(e.source) && exists(e.target));
   const droppedEdgeCount = normalized.edges.length - keptEdges.length;
   if (droppedEdgeCount > 0) warnings.push(`已丢弃 ${droppedEdgeCount} 条悬空边（源/目标节点被过滤）`);
 
